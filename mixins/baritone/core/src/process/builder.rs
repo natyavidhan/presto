@@ -32,6 +32,14 @@ impl BuilderProcess {
     pub fn place_at(&self, _x: i32, _y: i32, _z: i32) -> Option<String> {
         None
     }
+
+    /// `clearArea`: mine out everything between two corners.
+    pub fn clear_area(&mut self, bot: &mut Bot, _corner1: crate::math::BlockPos, _corner2: crate::math::BlockPos) {
+        bot.log_direct("Clearing an area needs the builder, which isn't ported yet");
+    }
+
+    /// `resume`: carry on after `pause`.
+    pub fn resume(&mut self) {}
 }
 
 impl Process for BuilderProcess {

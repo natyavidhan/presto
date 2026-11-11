@@ -46,6 +46,7 @@ impl Sim {
             ..PlayerState::default()
         });
         game.inventory = Inventory::default();
+        game.now_ms = 1_700_000_000_000;
         let mut sim = Self {
             table: world.table,
             src: world.src,
@@ -103,6 +104,7 @@ impl Sim {
             // The result goes on the channel right after the search says it's finished.
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        self.game.now_ms += 50;
         self.refresh_world();
         let c = self.b.tick(&mut self.game);
         self.ticks += 1;
@@ -315,5 +317,65 @@ mod tests {
         // Six blocks in a row, two at a time with walking between pairs: no idle ticks on the blocks.
         assert!(last - first <= 5 * 16 + 3 * 6, "breaking took {} ticks: {:?}", last - first, sim.broken);
     }
-}
 
+    /// Chat lines Baritone printed in a tick, as text.
+    fn chat_text(c: &Controls) -> Vec<String> {
+        c.chat.iter().map(|l| l.text()).collect()
+    }
+
+    #[test]
+    fn goto_command_from_chat() {
+        let mut w = TestWorld::new();
+        w.floor(-5, 20, -5, 5, 64);
+        let mut sim = Sim::new(w, BlockPos::new(0, 65, 0));
+        assert!(sim.b.on_send_chat("#goto 12 65 2"), "the chat line is Baritone's");
+        let c = sim.step();
+        let chat = chat_text(&c);
+        assert!(chat.iter().any(|l| l.contains("> goto 12 65 2")), "{chat:?}");
+        assert!(chat.iter().any(|l| l.contains("Going to: GoalBlock{x=12,y=65,z=2}")), "{chat:?}");
+        let goal = BlockPos::new(12, 65, 2);
+        assert!(sim.run_until(200, |s| s.feet() == goal), "stuck at {}", sim.feet());
+        // Plain chat isn't taken; a setting's name is (chatControl).
+        assert!(!sim.b.on_send_chat("hello"));
+        assert!(sim.b.on_send_chat("allowBreak false"));
+        sim.step();
+        assert!(!sim.b.settings().allow_break);
+    }
+
+    #[test]
+    fn mine_command_mines_every_block() {
+        let mut w = TestWorld::new();
+        w.floor(-8, 23, -8, 8, 64);
+        let ores = [BlockPos::new(5, 65, 0), BlockPos::new(8, 65, 4), BlockPos::new(12, 65, -3)];
+        for p in ores {
+            w.set(p.x, p.y, p.z, "minecraft:dirt");
+        }
+        // A bounded world, so scans end.
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                w.src.loaded.insert((cx, cz));
+            }
+        }
+        let mut sim = Sim::new(w, BlockPos::new(0, 65, 0));
+        sim.b.bot.settings_mut().explore_for_blocks = false;
+        assert!(sim.b.on_send_chat("#mine dirt"));
+        let done = sim.run_until(600, |s| ores.iter().all(|p| s.broken.iter().any(|(b, _)| b == p)));
+        assert!(done, "broke {:?} in {} ticks, at {}", sim.broken, sim.ticks, sim.feet());
+        // No other block was touched.
+        assert_eq!(sim.broken.len(), 3, "{:?}", sim.broken);
+    }
+
+    #[test]
+    fn unknown_commands_and_bad_arguments_are_reported() {
+        let mut w = TestWorld::new();
+        w.floor(-2, 2, -2, 2, 64);
+        let mut sim = Sim::new(w, BlockPos::new(0, 65, 0));
+        assert!(sim.b.on_send_chat("#nosuchcommand"));
+        assert!(sim.b.on_send_chat("#goal 1 2 3 4"));
+        assert!(sim.b.on_send_chat("#set maxFallHeightNoWater lots"));
+        let chat = chat_text(&sim.step());
+        assert!(chat.iter().any(|l| l.contains("Command not found: nosuchcommand")), "{chat:?}");
+        assert!(chat.iter().any(|l| l.contains("Too many arguments (expected at most 3)")), "{chat:?}");
+        assert!(chat.iter().any(|l| l.contains("Error at argument #2: Expected a valid value")), "{chat:?}");
+    }
+}

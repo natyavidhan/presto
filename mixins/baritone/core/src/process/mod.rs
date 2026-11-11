@@ -12,6 +12,7 @@ pub mod follow;
 pub mod get_to_block;
 pub mod inventory_pauser;
 pub mod mine;
+pub mod pause;
 
 use crate::behavior::pathing::PathingBehavior;
 use crate::bot::Bot;
@@ -136,11 +137,13 @@ pub enum ProcessId {
     InventoryPauser,
     Elytra,
     Backfill,
+    /// `#pause` (`ExecutionControlCommands`), registered with the commands, after the rest.
+    Pause,
 }
 
 impl ProcessId {
     /// Registration order (`Baritone`'s constructor).
-    pub const ALL: [ProcessId; 10] = [
+    pub const ALL: [ProcessId; 11] = [
         ProcessId::Follow,
         ProcessId::Mine,
         ProcessId::CustomGoal,
@@ -151,6 +154,7 @@ impl ProcessId {
         ProcessId::InventoryPauser,
         ProcessId::Elytra,
         ProcessId::Backfill,
+        ProcessId::Pause,
     ];
 }
 
@@ -167,6 +171,7 @@ pub struct Processes {
     pub inventory_pauser: inventory_pauser::InventoryPauserProcess,
     pub elytra: elytra::ElytraProcess,
     pub backfill: backfill::BackfillProcess,
+    pub pause: pause::PauseProcess,
 }
 
 impl Processes {
@@ -182,6 +187,7 @@ impl Processes {
             ProcessId::InventoryPauser => &mut self.inventory_pauser,
             ProcessId::Elytra => &mut self.elytra,
             ProcessId::Backfill => &mut self.backfill,
+            ProcessId::Pause => &mut self.pause,
         }
     }
 }

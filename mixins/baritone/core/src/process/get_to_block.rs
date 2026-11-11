@@ -124,7 +124,7 @@ impl GetToBlockProcess {
     }
 
     /// `blacklistClosest`: the closest location and every location joined to it face to face.
-    fn blacklist_closest(&mut self, c: &mut ProcessCtx) -> bool {
+    pub fn blacklist_closest(&mut self, c: &mut ProcessCtx) -> bool {
         let feet = c.pc.player_feet();
         let known = self.known_locations.get_or_insert_with(Vec::new);
         let mut new_blacklist: Vec<BlockPos> = known

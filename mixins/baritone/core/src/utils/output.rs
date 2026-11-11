@@ -11,6 +11,10 @@ pub struct Output {
     pub toasts: Vec<(String, String)>,
     /// Leave the server with this message (`disconnectOnArrival`).
     pub disconnect: Option<String>,
+    /// Rebuild the rendered chunks around the player (`#render`).
+    pub rerender_chunks: bool,
+    /// Open the screen where clicking a block sets a goal or a selection (`#click`).
+    pub open_click: bool,
 }
 
 /// `Helper.FORCE_COMMAND_PREFIX`: what the commands Baritone's own clickable chat runs start with, so a click

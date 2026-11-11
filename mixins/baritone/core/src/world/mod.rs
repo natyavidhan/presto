@@ -119,6 +119,8 @@ pub struct Dimension {
     /// `DimensionType.logicalHeight()`.
     pub logical_height: i32,
     pub has_ceiling: bool,
+    /// The level's sea level (`getSeaLevel`): 63 in the overworld, 32 in the nether.
+    pub sea_level: i32,
 }
 
 impl Dimension {
@@ -129,6 +131,7 @@ impl Dimension {
             height: 384,
             logical_height: 384,
             has_ceiling: false,
+            sea_level: 63,
         }
     }
     pub fn nether() -> Self {
@@ -138,6 +141,7 @@ impl Dimension {
             height: 256,
             logical_height: 128,
             has_ceiling: true,
+            sea_level: 32,
         }
     }
     pub fn end() -> Self {
@@ -147,6 +151,7 @@ impl Dimension {
             height: 256,
             logical_height: 256,
             has_ceiling: false,
+            sea_level: 0,
         }
     }
     pub fn is_nether(&self) -> bool {

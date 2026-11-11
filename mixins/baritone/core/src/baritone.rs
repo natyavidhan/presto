@@ -31,12 +31,25 @@ use crate::world::{BlockSource, StateId, flags};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// A command waiting for the next tick.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Pending {
+    /// Typed with the prefix (`#goto 1 2 3`): an unknown one is reported.
+    Prefixed(String),
+    /// Typed without it, with `chatControl` (`goto 1 2 3`).
+    Chat(String),
+    /// From Baritone's own clickable chat, or `/baritone`: run as it is.
+    Direct(String),
+}
+
 pub struct Baritone {
     pub bot: Bot,
     pub procs: Processes,
     pub control: PathingControlManager,
     /// Commands typed in the chat, run at the start of the next tick.
-    pending_commands: Vec<String>,
+    pending_commands: Vec<Pending>,
+    /// Waypoints deleted with `#wp delete` and `#wp clear`, by world, for `#wp restore`.
+    deleted_waypoints: std::collections::HashMap<PathBuf, Vec<Waypoint>>,
     /// The settings the globals (goal heuristics, coordinate censoring, the cache's config) were set from.
     applied_settings: Option<Arc<Settings>>,
     /// The path events of the last tick (`PathEvent`), for the renderer and the GUI.
@@ -62,6 +75,7 @@ impl Baritone {
             procs: Processes::default(),
             control: PathingControlManager::default(),
             pending_commands: Vec::new(),
+            deleted_waypoints: Default::default(),
             applied_settings: None,
             events: Vec::new(),
         }
@@ -230,6 +244,8 @@ impl Baritone {
         controls.notifications = out.notifications;
         controls.toasts = out.toasts;
         controls.disconnect = out.disconnect;
+        controls.rerender_chunks = out.rerender_chunks;
+        controls.open_click = out.open_click;
         controls
     }
 
@@ -239,24 +255,48 @@ impl Baritone {
     }
 
     fn run_commands(&mut self, pc: Option<&PlayerContext>) {
-        for line in std::mem::take(&mut self.pending_commands) {
-            crate::command::execute(self, pc, &line);
+        for p in std::mem::take(&mut self.pending_commands) {
+            match p {
+                Pending::Prefixed(cmd) => {
+                    if !crate::command::run_command(self, pc, &cmd) && !cmd.trim().is_empty() {
+                        let label = crate::command::args::expand(&cmd, false).0;
+                        crate::command::CommandError::NotFound(label).handle(self);
+                    }
+                }
+                Pending::Chat(msg) => {
+                    crate::command::run_command(self, pc, &msg);
+                }
+                Pending::Direct(cmd) => {
+                    crate::command::execute(self, pc, &cmd);
+                }
+            }
         }
     }
 
     /// `onSendChatMessage`: chat the player is about to send. Baritone takes `#commands` (with `prefixControl`),
-    /// and the commands its own clickable chat runs; it returns true for those, which then aren't sent.
+    /// the commands its own clickable chat runs, and (with `chatControl`) any line that is a command or a
+    /// setting; it returns true for those, which then aren't sent. They run at the start of the next tick.
     pub fn on_send_chat(&mut self, message: &str) -> bool {
-        if let Some(cmd) = message.strip_prefix(force_command_prefix()) {
-            self.pending_commands.push(cmd.to_string());
+        let s = self.bot.settings.clone();
+        let force = message.starts_with(force_command_prefix());
+        if (s.prefix_control && message.starts_with(s.prefix.as_str())) || force {
+            let cmd = if force {
+                &message[force_command_prefix().len()..]
+            } else {
+                &message[s.prefix.len()..]
+            };
+            self.pending_commands.push(Pending::Prefixed(cmd.to_string()));
             return true;
         }
-        let s = &self.bot.settings;
-        if s.prefix_control
-            && let Some(cmd) = message.strip_prefix(s.prefix.as_str())
-        {
-            self.pending_commands.push(cmd.to_string());
-            return true;
+        if s.chat_control || s.chat_control_anyway {
+            if message.trim().eq_ignore_ascii_case("damn") {
+                self.bot.log_direct("daniel");
+                return false;
+            }
+            if crate::command::is_command(message) {
+                self.pending_commands.push(Pending::Chat(message.to_string()));
+                return true;
+            }
         }
         false
     }
@@ -266,7 +306,7 @@ impl Baritone {
     pub fn on_chat_click(&mut self, command: &str) -> bool {
         match command.strip_prefix(force_command_prefix()) {
             Some(cmd) => {
-                self.pending_commands.push(cmd.to_string());
+                self.pending_commands.push(Pending::Direct(cmd.to_string()));
                 true
             }
             None => false,
@@ -275,7 +315,69 @@ impl Baritone {
 
     /// `/baritone <args>`: a command typed as a game command.
     pub fn on_command(&mut self, args: &str) {
-        self.pending_commands.push(args.to_string());
+        self.pending_commands.push(Pending::Prefixed(args.to_string()));
+    }
+
+    /// `onPreTabComplete`: completions for what is typed in the chat box, when it starts with the prefix.
+    pub fn tab_complete(&mut self, game: &GameState, typed: &str) -> Vec<String> {
+        let s = self.bot.settings.clone();
+        if !s.prefix_control {
+            return Vec::new();
+        }
+        let Some(msg) = typed.strip_prefix(s.prefix.as_str()) else {
+            return Vec::new();
+        };
+        let has_throwaway = has_generic_throwaway(&game.inventory, &s);
+        let pc = PlayerContext::new(game, &s, has_throwaway);
+        let words = crate::command::args::split(msg, true).len();
+        let mut c = crate::command::Ctx { b: self, pc: pc.as_ref() };
+        let completions = crate::command::tab_complete(&mut c, msg);
+        if words == 1 {
+            completions.into_iter().map(|x| format!("{}{x}", s.prefix)).collect()
+        } else {
+            completions
+        }
+    }
+
+    /// `PathingBehavior.cancelEverything`: the path, if it's safe to stop it, and every process.
+    pub fn cancel_everything(&mut self) -> bool {
+        let do_it = self.bot.pathing.is_safe_to_cancel() && self.procs.elytra.is_safe_to_cancel();
+        if do_it {
+            self.bot.pathing.secret_internal_segment_cancel(&mut self.bot.input);
+        }
+        self.control.cancel_everything(&mut self.procs, &mut self.bot);
+        do_it
+    }
+
+    /// `WorldScanner.repack`: queues every loaded chunk within `range` chunks of the player for the cache.
+    pub fn repack(&self, game: &GameState, range: i32) -> usize {
+        let (Some(view), Some(player)) = (&game.world, &game.player) else {
+            return 0;
+        };
+        let Some(w) = self.bot.world.current() else { return 0 };
+        let feet = player.feet_raw();
+        let (pcx, pcz) = (feet.x >> 4, feet.z >> 4);
+        let mut queued = 0;
+        for cx in pcx - range..=pcx + range {
+            for cz in pcz - range..=pcz + range {
+                if view.source.is_loaded(cx << 4, cz << 4) {
+                    w.cache.queue_for_packing(cx, cz, view.source.clone());
+                    queued += 1;
+                }
+            }
+        }
+        queued
+    }
+
+    /// The waypoints deleted in this world, newest last.
+    pub fn deleted_waypoints(&mut self) -> &mut Vec<Waypoint> {
+        let key = self
+            .bot
+            .world
+            .current()
+            .map(|w| w.directory.clone())
+            .unwrap_or_default();
+        self.deleted_waypoints.entry(key).or_default()
     }
 
     /// `onChunkEvent`: a chunk finished loading, or is about to unload. The cache packs it in the background.

@@ -374,6 +374,11 @@ impl CachedWorld {
         }
     }
 
+    /// Drops the regions far from the player that are saved (`#gc`).
+    pub fn prune_far_regions(&self) {
+        self.prune();
+    }
+
     fn prune(&self) {
         let center = self
             .player

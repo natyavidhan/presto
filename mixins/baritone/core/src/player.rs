@@ -141,6 +141,8 @@ pub struct EntityInfo {
     pub falling_block: bool,
     /// Stops blocks being placed where it is (`blocksBuilding`: living things, minecarts, boats, TNT...).
     pub blocks_building: bool,
+    /// A `LivingEntity` (mobs, players, armor stands).
+    pub living: bool,
 }
 
 /// The local player.
@@ -238,6 +240,17 @@ pub struct GameState {
     pub mouse_sensitivity: f64,
     /// The local player's light level for `Spider` avoidance (`getLightLevelDependentMagicValue`).
     pub light_level: f32,
+    /// Where the camera is when it isn't the player (a freecam): `#come` goes there (`viewerPos`).
+    pub camera: Option<Vec3>,
+    /// Item and entity ids, for the commands that take them.
+    pub registries: Arc<Registries>,
+}
+
+/// The game's item and entity type ids (`BuiltInRegistries.ITEM`, `ENTITY_TYPE`).
+#[derive(Clone, Debug, Default)]
+pub struct Registries {
+    pub items: Vec<Arc<str>>,
+    pub entity_types: Vec<Arc<str>>,
 }
 
 impl GameState {
@@ -257,6 +270,8 @@ impl GameState {
             singleplayer: false,
             mouse_sensitivity: 0.5,
             light_level: 1.0,
+            camera: None,
+            registries: Arc::default(),
         }
     }
     pub fn in_world(&self) -> bool {
@@ -425,4 +440,8 @@ pub struct Controls {
     pub disconnect: Option<String>,
     /// Toasts to show: title and message.
     pub toasts: Vec<(String, String)>,
+    /// Rebuild the rendered chunks around the player (`#render`).
+    pub rerender_chunks: bool,
+    /// Open the screen where clicking a block sets a goal or a selection (`#click`).
+    pub open_click: bool,
 }

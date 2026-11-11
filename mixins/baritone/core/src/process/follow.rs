@@ -27,7 +27,7 @@ pub enum FollowFilter {
 impl FollowFilter {
     fn matches(&self, e: &EntityInfo) -> bool {
         match self {
-            FollowFilter::Entities => true,
+            FollowFilter::Entities => e.living,
             FollowFilter::Players => e.is_player,
             FollowFilter::PlayerNames(names) => {
                 e.is_player
