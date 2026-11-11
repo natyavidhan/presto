@@ -398,11 +398,11 @@ impl MovementKeys {
     }
 }
 
-/// What Baritone asks the game to do after a tick.
+/// What Baritone asks the game to do in a tick.
 #[derive(Clone, Debug, Default)]
 pub struct Controls {
-    /// Turn the player to this rotation now.
-    pub rotation: Option<Rotation>,
+    /// Turn the player before it moves and acts this tick, and maybe turn the view back after.
+    pub look: Option<crate::behavior::look::LookCommand>,
     /// While `Some`, Baritone owns the movement keys (the player's own are ignored).
     pub movement: Option<MovementKeys>,
     /// Hold the attack key (mining the block under the crosshair).
@@ -421,4 +421,8 @@ pub struct Controls {
     pub stop_flying: bool,
     /// Messages to send to the server as the player.
     pub send_chat: Vec<String>,
+    /// Leave the server with this message (`disconnectOnArrival`).
+    pub disconnect: Option<String>,
+    /// Toasts to show: title and message.
+    pub toasts: Vec<(String, String)>,
 }

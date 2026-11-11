@@ -466,7 +466,7 @@ impl BlockStateInterface {
 }
 
 /// A source over a fixed map of blocks, for tests and tools.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MapSource {
     pub blocks: rustc_hash::FxHashMap<BlockPos, StateId>,
     pub default: StateId,

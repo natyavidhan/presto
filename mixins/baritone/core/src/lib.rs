@@ -8,17 +8,22 @@
 //! The module layout follows Baritone's Java packages, and items keep their Java names in their docs, so the
 //! two read side by side.
 
+pub mod baritone;
 pub mod behavior;
 pub mod bot;
 pub mod cache;
+pub mod command;
 pub mod ctx;
 pub mod math;
 pub mod pathing;
 pub mod player;
 pub mod process;
 pub mod settings;
+#[cfg(test)]
+mod sim;
 pub mod utils;
 pub mod world;
 
+pub use baritone::Baritone;
 pub use math::{Aabb, BlockPos, Direction, Rotation, Vec3};
 pub use settings::Settings;

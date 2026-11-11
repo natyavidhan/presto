@@ -13,6 +13,20 @@ pub struct Output {
     pub disconnect: Option<String>,
 }
 
+/// `Helper.FORCE_COMMAND_PREFIX`: what the commands Baritone's own clickable chat runs start with, so a click
+/// runs them whatever `prefix` is. It is random per session, so a server's chat can't fake one.
+pub fn force_command_prefix() -> &'static str {
+    use std::hash::{BuildHasher, Hasher};
+    static PREFIX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PREFIX.get_or_init(|| {
+        // `RandomState` is seeded from the OS's randomness.
+        let a = std::collections::hash_map::RandomState::new().build_hasher().finish();
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(a);
+        format!("<<{a:016x}{:016x}>>", h.finish())
+    })
+}
+
 /// `Helper.getPrefix`: `[Baritone]`, light purple in dark purple brackets.
 pub fn prefix(settings: &Settings) -> Vec<Span> {
     vec![
