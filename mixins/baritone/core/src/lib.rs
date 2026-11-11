@@ -18,6 +18,7 @@ pub mod math;
 pub mod pathing;
 pub mod player;
 pub mod process;
+pub mod render;
 pub mod settings;
 #[cfg(test)]
 mod sim;
@@ -25,5 +26,7 @@ pub mod utils;
 pub mod world;
 
 pub use baritone::Baritone;
+/// The hash map the core's interfaces take (`BlockTable::build`'s defaults).
+pub use rustc_hash::FxHashMap;
 pub use math::{Aabb, BlockPos, Direction, Rotation, Vec3};
 pub use settings::Settings;

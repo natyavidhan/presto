@@ -855,3 +855,99 @@ simple_command!(CancelCommand, ["cancel", "c", "stop"], "Cancel what Baritone is
     c.log("ok canceled");
     Ok(())
 });
+
+pub struct ExploreCommand;
+
+impl Command for ExploreCommand {
+    fn names(&self) -> &[&'static str] {
+        &["explore"]
+    }
+    fn execute(&self, c: &mut Ctx, _label: &str, args: &mut Args) -> Result<(), CommandError> {
+        if args.has_any() {
+            args.require_exactly(2)?;
+        } else {
+            args.require_max(0)?;
+        }
+        let feet = c.pc()?.player_feet();
+        let goal = if args.has_any() {
+            args.datatype("RelativeGoalXZ", |a| relative_goal_xz(a, feet))?
+        } else {
+            GoalXZ::new(feet.x, feet.z)
+        };
+        c.b.procs.explore.explore(goal.x, goal.z);
+        c.log(&format!("Exploring from {goal}"));
+        Ok(())
+    }
+    fn tab_complete(&self, _c: &mut Ctx, _label: &str, args: &mut Args) -> Result<Vec<String>, CommandError> {
+        if args.has_at_most(2) {
+            while args.has(2) {
+                args.get()?;
+            }
+            return Ok(complete_relative_coordinate(args));
+        }
+        Ok(Vec::new())
+    }
+    fn short_desc(&self) -> String {
+        "Explore things".into()
+    }
+    fn long_desc(&self) -> Vec<String> {
+        lines(&[
+            "Tell Baritone to explore randomly. If you used explorefilter before this, it will be applied.",
+            "",
+            "Usage:",
+            "> explore - Explore from your current position.",
+            "> explore <x> <z> - Explore from the specified X and Z position.",
+        ])
+    }
+}
+
+pub struct ExploreFilterCommand;
+
+impl Command for ExploreFilterCommand {
+    fn names(&self) -> &[&'static str] {
+        &["explorefilter"]
+    }
+    fn execute(&self, c: &mut Ctx, _label: &str, args: &mut Args) -> Result<(), CommandError> {
+        args.require_max(2)?;
+        let name = args.get_string()?;
+        // Relative to the folder the game's folder is in, as Baritone reads it.
+        let base = c
+            .b
+            .bot
+            .directory
+            .parent()
+            .and_then(|game| game.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        let path = base.join(&name);
+        let mut invert = false;
+        if args.has_any() {
+            if args.get_string()?.eq_ignore_ascii_case("invert") {
+                invert = true;
+            } else {
+                return Err(CommandError::invalid_type(&args.consumed(), "either \"invert\" or nothing"));
+            }
+        }
+        let text = std::fs::read_to_string(&path).map_err(|_| CommandError::InvalidState("File not found".into()))?;
+        let filter = crate::process::explore::ChunkFilter::parse(&text, invert).map_err(CommandError::InvalidState)?;
+        c.log(&format!("Loaded {} positions", filter.len()));
+        c.b.procs.explore.apply_filter(filter);
+        c.log(&format!("Explore filter applied. Inverted: {invert}"));
+        Ok(())
+    }
+    fn short_desc(&self) -> String {
+        "Explore chunks from a json".into()
+    }
+    fn long_desc(&self) -> Vec<String> {
+        lines(&[
+            "Apply an explore filter before using explore, which tells the explore process which chunks have been explored/not explored.",
+            "",
+            "The JSON file will follow this format: [{\"x\":0,\"z\":0},...]",
+            "",
+            "If 'invert' is specified, the chunks listed will be considered NOT explored, rather than explored.",
+            "",
+            "Usage:",
+            "> explorefilter <path> [invert] - Load the JSON file referenced by the specified path. If invert is specified, it must be the literal word 'invert'.",
+        ])
+    }
+}

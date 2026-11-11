@@ -1,0 +1,102 @@
+[mod]
+id = "baritone"
+version = "0.1.0"
+priority = 100
+
+[compatibility]
+# Horizon Nightly 2026-11-08.
+horizon_revision = "fdc87aecdbd116bf1e08adcd062fcbaea8c2e2ca"
+
+# Baritone itself: path finding, processes, commands, settings. No tie to the game.
+[[crate]]
+id = "core"
+path = "core"
+
+# The glue: `crate::game::baritone`, which reads the game and drives the player.
+[[module]]
+id = "glue"
+file = "crates/horizon-client/src/game.rs"
+name = "baritone"
+source = "glue.rs"
+
+# Each client tick: Baritone decides before the tick picks its target, clicks and moves the player...
+[[injection]]
+id = "tick-pre"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_tick_pre"
+kind = "HEAD"
+helper = "hooks/tick_pre.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+# ...and a turn made for the tick only (freeLook) is taken back after it.
+[[injection]]
+id = "tick-post"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_tick_post"
+kind = "HEAD"
+helper = "hooks/tick_post.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+# The movement keys while Baritone controls the player.
+[[injection]]
+id = "movement"
+hook = "movement_input"
+hook_version = 1
+kind = "HEAD"
+helper = "hooks/movement.rs"
+bindings = [
+  { name = "forward", ty = "&mut f32", value = "&mut *forward" },
+  { name = "strafe", ty = "&mut f32", value = "&mut *strafe" },
+  { name = "jump", ty = "&mut bool", value = "&mut *jump" },
+  { name = "sneak", ty = "&mut bool", value = "&mut *sneak" },
+]
+
+# No 5-tick wait after each broken block while Baritone mines: its own blockBreakSpeed decides.
+[[injection]]
+id = "mining-delay"
+target = "horizon_client::game::remote::Game<'_>::remote_mining"
+kind = "HEAD"
+helper = "hooks/mining.rs"
+bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
+
+# `#commands` typed in the chat box.
+[[injection]]
+id = "chat"
+target = "horizon_client::game::chat::Game<'_>::handle_chat_input"
+kind = "HEAD"
+cancellable = true
+helper = "hooks/chat.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "message", ty = "&str", value = "message" },
+]
+
+# `/baritone ...`, and the commands Baritone's clickable chat runs.
+[[injection]]
+id = "command"
+hook = "command"
+hook_version = 1
+kind = "HEAD"
+cancellable = true
+helper = "hooks/command.rs"
+bindings = [
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+[[injection]]
+id = "commands"
+hook = "commands"
+hook_version = 1
+kind = "HEAD"
+helper = "hooks/commands.rs"
+bindings = [{ name = "commands", ty = "&mut Vec<&'static str>", value = "&mut *commands" }]
+
+# The path and the goal, drawn in the world.
+[[injection]]
+id = "render"
+target = "horizon_client::game::native_hooks::Game<'_>::native_world_primitives"
+kind = "HEAD"
+helper = "hooks/render.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "primitives", ty = "&mut WorldPrimitives", value = "&mut *primitives" },
+]
