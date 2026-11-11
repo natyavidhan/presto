@@ -1,0 +1,4 @@
+# Keep LF line endings everywhere: the mod is built on Linux and macOS as well as Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
