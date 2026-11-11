@@ -96,9 +96,9 @@ pub struct PauserState {
 }
 
 impl PauserState {
-    /// `stationaryForInventoryMove`.
-    pub fn stationary_for_inventory_move(&mut self) -> bool {
-        self.pause_requested_last_tick = true;
+    /// `stationaryForInventoryMove`'s answer. Asking it also asks for a pause, which the tick passes on from
+    /// [`InventoryBehavior::pause_requested`](crate::behavior::inventory::InventoryBehavior::pause_requested).
+    pub fn stationary(&self) -> bool {
         self.safe_to_cancel_last_tick && self.ticks_of_stationary > 1
     }
 }

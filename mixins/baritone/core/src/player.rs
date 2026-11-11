@@ -139,6 +139,8 @@ pub struct EntityInfo {
     pub angry: bool,
     /// A falling block entity.
     pub falling_block: bool,
+    /// Stops blocks being placed where it is (`blocksBuilding`: living things, minecarts, boats, TNT...).
+    pub blocks_building: bool,
 }
 
 /// The local player.
@@ -220,6 +222,8 @@ pub struct GameState {
     pub entities: Vec<EntityInfo>,
     /// A screen covers the world (an inventory, the pause menu...), the chat aside.
     pub screen_open: bool,
+    /// A menu other than the player's own inventory is open (a chest, a furnace, a crafting table...).
+    pub container_open: bool,
     /// The chat is open.
     pub chat_open: bool,
     /// Milliseconds since the epoch.
@@ -245,6 +249,7 @@ impl GameState {
             hit: HitResult::Miss,
             entities: Vec::new(),
             screen_open: false,
+            container_open: false,
             chat_open: false,
             now_ms: 0,
             world_dir: None,

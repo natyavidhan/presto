@@ -9,11 +9,13 @@
 //! two read side by side.
 
 pub mod behavior;
+pub mod bot;
 pub mod cache;
 pub mod ctx;
 pub mod math;
 pub mod pathing;
 pub mod player;
+pub mod process;
 pub mod settings;
 pub mod utils;
 pub mod world;

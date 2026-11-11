@@ -13,9 +13,11 @@ pub mod get_to_block;
 pub mod inventory_pauser;
 pub mod mine;
 
+use crate::behavior::pathing::PathingBehavior;
 use crate::bot::Bot;
 use crate::ctx::PlayerContext;
 use crate::pathing::context::Protection;
+use crate::pathing::movement::Exec;
 use crate::pathing::goals::{GoalRef, goals_equal};
 use std::sync::Arc;
 
@@ -79,6 +81,30 @@ impl std::fmt::Debug for PathingCommand {
 pub struct ProcessCtx<'a, 'b> {
     pub bot: &'a mut Bot,
     pub pc: &'a PlayerContext<'b>,
+}
+
+impl ProcessCtx<'_, '_> {
+    /// Runs movement code (`MovementHelper`: placing a block, picking a tool...) from a process.
+    pub fn with_exec<R>(&mut self, f: impl FnOnce(&mut Exec) -> R) -> R {
+        let mut debug = Vec::new();
+        let no_schematic = |_: i32, _: i32, _: i32| None;
+        let bot = &mut *self.bot;
+        let mut ex = Exec {
+            ctx: self.pc,
+            look: &mut bot.look,
+            input: &mut bot.input,
+            inventory: &mut bot.inventory,
+            path_start: PathingBehavior::path_start(self.pc),
+            builder_place_at: &no_schematic,
+            container_open: self.pc.game.container_open,
+            stationary: bot.pauser.stationary(),
+            debug: &mut debug,
+            stop_flying: false,
+        };
+        let r = f(&mut ex);
+        bot.out.chat.extend(debug);
+        r
+    }
 }
 
 /// `IBaritoneProcess`.

@@ -9,6 +9,8 @@ pub struct Output {
     pub chat: Vec<ChatLine>,
     pub notifications: Vec<Notification>,
     pub toasts: Vec<(String, String)>,
+    /// Leave the server with this message (`disconnectOnArrival`).
+    pub disconnect: Option<String>,
 }
 
 /// `Helper.getPrefix`: `[Baritone]`, light purple in dark purple brackets.

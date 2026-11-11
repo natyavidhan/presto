@@ -50,9 +50,20 @@ pub fn execute(job: impl FnOnce() + Send + 'static) {
     let _ = tx.send(Box::new(job));
 }
 
-/// A value a background job fills in for the game thread to pick up.
-#[derive(Clone, Default)]
+/// A value a background job fills in for the game thread to pick up. Clones share the one slot.
 pub struct Slot<T>(Arc<Mutex<Option<T>>>);
+
+impl<T> Clone for Slot<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<T> Slot<T> {
     pub fn new() -> Self {

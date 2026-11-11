@@ -16,6 +16,9 @@ pub struct InventoryBehavior {
     pub selected: Option<usize>,
     /// Inventory clicks to make this tick.
     pub clicks: Vec<InventoryClick>,
+    /// A move waited this tick for the player to stand still (`stationaryForInventoryMove` was asked), which
+    /// asks the inventory pauser to stop the player.
+    pub pause_requested: bool,
     rng: ForkableRandom,
 }
 
@@ -26,6 +29,7 @@ impl Default for InventoryBehavior {
             last_tick_requested_move: None,
             selected: None,
             clicks: Vec::new(),
+            pause_requested: false,
             rng: ForkableRandom::from_time(),
         }
     }
@@ -46,6 +50,7 @@ impl InventoryBehavior {
     pub fn begin_tick(&mut self) {
         self.selected = None;
         self.clicks.clear();
+        self.pause_requested = false;
     }
 
     /// The hotbar slot in hand, counting a choice made earlier this tick.
@@ -124,9 +129,12 @@ impl InventoryBehavior {
             );
             return false;
         }
-        if c.settings.inventory_move_only_if_stationary && !c.stationary {
-            log::debug!("[Baritone] Inventory move requested but delaying until stationary");
-            return false;
+        if c.settings.inventory_move_only_if_stationary {
+            self.pause_requested = true;
+            if !c.stationary {
+                log::debug!("[Baritone] Inventory move requested but delaying until stationary");
+                return false;
+            }
         }
         self.clicks.push(InventoryClick {
             slot: if in_inventory < 9 {

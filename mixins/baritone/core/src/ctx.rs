@@ -2,7 +2,7 @@
 //! `MovementHelper` rule reads it the same way the search did), and the world-dependent parts of
 //! `RotationUtils` and `VecUtils`.
 
-use crate::behavior::look::AimProcessor;
+use crate::behavior::look::{AimProcessor, LookBehavior};
 use crate::math::{BlockPos, Rotation, Vec3, rotation_utils};
 use crate::pathing::context::CalculationContext;
 use crate::player::{GameState, Inventory, PlayerState};
@@ -73,6 +73,20 @@ impl<'a> PlayerContext<'a> {
 
     pub fn is_looking_at(&self, pos: BlockPos) -> bool {
         self.selected_block() == Some(pos)
+    }
+
+    /// The block the crosshair will be on once this tick's turn to `rotation` is applied (with `instantAim`;
+    /// without it, the block it is on now). The game turns the player before it handles this tick's clicks,
+    /// so a process can aim and click in the same tick.
+    pub fn aimed_block(&self, look: &LookBehavior, rotation: Option<Rotation>) -> Option<BlockPos> {
+        match rotation {
+            Some(rotation) if self.settings.instant_aim => {
+                let actual = look.peek(rotation, self.player_rotations(), self.game.mouse_sensitivity);
+                self.ray_trace_towards(actual, self.block_reach_distance(), self.player.crouching)
+                    .block_pos()
+            }
+            _ => self.selected_block(),
+        }
     }
 
     /// `IPlayerController.getBlockReachDistance`: 5 in creative, else `blockReachDistance`.
