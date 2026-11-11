@@ -1,0 +1,13 @@
+# Development workspace. The mod itself is the bundle in `mixins/baritone/`: Horizon's launcher
+# stages `mixins/baritone/core` as a `[[crate]]` of the game and injects `mixins/baritone/glue.rs`
+# and the hook helpers into horizon-client. This workspace only builds and tests the core crate
+# on its own, without a Horizon checkout.
+[workspace]
+members = ["mixins/baritone/core"]
+resolver = "3"
+
+[profile.release]
+debug = 1
+
+[profile.test]
+opt-level = 2

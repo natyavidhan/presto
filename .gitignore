@@ -1,0 +1,15 @@
+# Cargo build output
+/target/
+**/target/
+
+# Staged Horizon workspaces and packaged mods made by the tools
+/stage/
+/dist/
+*.hnmod
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
