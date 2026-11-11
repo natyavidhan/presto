@@ -11,6 +11,17 @@ use crate::cache::{CachedRegion, CachedWorld};
 use crate::math::BlockPos;
 use std::sync::Arc;
 
+/// How [`BlockSource::copy_section`] filled a section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionFill {
+    /// The chunk isn't loaded: nothing was written.
+    Unloaded,
+    /// Every block is this state: nothing was written.
+    Uniform(StateId),
+    /// The section's 4096 states were written, `y << 8 | z << 4 | x`.
+    Filled,
+}
+
 /// Blocks by position, readable from any thread: the loaded chunks of the client world as they were when
 /// the snapshot was taken.
 pub trait BlockSource: Send + Sync {
@@ -18,6 +29,31 @@ pub trait BlockSource: Send + Sync {
     fn state(&self, x: i32, y: i32, z: i32) -> StateId;
     /// Whether the chunk holding column `x, z` is loaded.
     fn is_loaded(&self, x: i32, z: i32) -> bool;
+    /// Copies the 16-block section `sy` (counted from the dimension's bottom, `min_y`) of chunk `cx, cz` into
+    /// `out`. Path searches read every block through these copies, so a source that can unpack a section in
+    /// one go (straight from its palette) should override this.
+    fn copy_section(&self, cx: i32, sy: i32, cz: i32, min_y: i32, out: &mut [StateId; 4096]) -> SectionFill {
+        if !self.is_loaded(cx << 4, cz << 4) {
+            return SectionFill::Unloaded;
+        }
+        let (bx, by, bz) = (cx << 4, min_y + (sy << 4), cz << 4);
+        let first = self.state(bx, by, bz);
+        let mut uniform = true;
+        for y in 0..16 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let s = self.state(bx + x, by + y, bz + z);
+                    uniform &= s == first;
+                    out[(y << 8 | z << 4 | x) as usize] = s;
+                }
+            }
+        }
+        if uniform {
+            SectionFill::Uniform(first)
+        } else {
+            SectionFill::Filled
+        }
+    }
 }
 
 /// A source with no chunks at all.
@@ -143,7 +179,34 @@ pub struct WorldView {
     pub border: WorldBorder,
 }
 
+/// A section the search has read: one state for all of it, or all 4096.
+enum Section {
+    Unfetched,
+    Uniform(StateId),
+    Data(Box<[StateId; 4096]>),
+}
+
+/// A chunk column the search has touched.
+struct Column {
+    /// Loaded in the live world (else blocks come from the cache).
+    loaded: bool,
+    sections: Box<[Section]>,
+}
+
+/// The sections a search has copied, by chunk.
+struct SectionCache {
+    columns: Vec<Column>,
+    index: rustc_hash::FxHashMap<(i32, i32), u32>,
+    last_key: (i32, i32),
+    last: u32,
+    scratch: Box<[StateId; 4096]>,
+}
+
 /// `BlockStateInterface`: a block lookup that reads the loaded chunks first, then Baritone's cache.
+///
+/// For a path search ([`BlockStateInterface::for_search`]), every section it touches is copied once into a
+/// flat array, so the millions of reads that follow are plain indexing. Live, one-tick lookups
+/// ([`BlockStateInterface::new`]) read the source directly.
 pub struct BlockStateInterface {
     pub table: Arc<BlockTable>,
     source: Arc<dyn BlockSource>,
@@ -153,14 +216,26 @@ pub struct BlockStateInterface {
     use_the_real_world: bool,
     min_y: i32,
     height: i32,
+    sections_per_column: i32,
     air: StateId,
+    sections: Option<std::cell::RefCell<SectionCache>>,
     prev_cached: std::cell::Cell<Option<(i32, i32)>>,
     prev_region: std::cell::RefCell<Option<Arc<CachedRegion>>>,
 }
 
 impl BlockStateInterface {
-    /// `use_the_real_world` is `!pathThroughCachedOnly`.
+    /// A lookup reading the source directly; `use_the_real_world` is `!pathThroughCachedOnly`.
     pub fn new(view: &WorldView, use_the_real_world: bool) -> Self {
+        Self::with_options(view, use_the_real_world, false)
+    }
+
+    /// A lookup for a path search, which copies the sections it reads.
+    pub fn for_search(view: &WorldView, use_the_real_world: bool) -> Self {
+        Self::with_options(view, use_the_real_world, true)
+    }
+
+    fn with_options(view: &WorldView, use_the_real_world: bool, cache_sections: bool) -> Self {
+        let height = view.dimension.height.max(16);
         Self {
             table: view.table.clone(),
             source: view.source.clone(),
@@ -169,8 +244,18 @@ impl BlockStateInterface {
             border: view.border,
             use_the_real_world,
             min_y: view.dimension.min_y,
-            height: view.dimension.height,
+            height,
+            sections_per_column: (height + 15) >> 4,
             air: view.table.air(),
+            sections: cache_sections.then(|| {
+                std::cell::RefCell::new(SectionCache {
+                    columns: Vec::new(),
+                    index: rustc_hash::FxHashMap::default(),
+                    last_key: (i32::MIN, i32::MIN),
+                    last: 0,
+                    scratch: Box::new([StateId(0); 4096]),
+                })
+            }),
             prev_cached: std::cell::Cell::new(None),
             prev_region: std::cell::RefCell::new(None),
         }
@@ -189,12 +274,45 @@ impl BlockStateInterface {
     /// Whether the client has the chunk holding this column loaded (`worldContainsLoadedChunk`).
     #[inline]
     pub fn world_contains_loaded_chunk(&self, x: i32, z: i32) -> bool {
-        self.source.is_loaded(x, z)
+        match &self.sections {
+            Some(cache) => {
+                let mut c = cache.borrow_mut();
+                let i = self.column(&mut c, x >> 4, z >> 4);
+                c.columns[i as usize].loaded
+            }
+            None => self.source.is_loaded(x, z),
+        }
     }
 
     #[inline]
     pub fn get_pos(&self, pos: BlockPos) -> StateId {
         self.get(pos.x, pos.y, pos.z)
+    }
+
+    /// The column's index in the cache, adding it (and asking the source whether it is loaded) the first time.
+    #[inline]
+    fn column(&self, c: &mut SectionCache, cx: i32, cz: i32) -> u32 {
+        if c.last_key == (cx, cz) {
+            return c.last;
+        }
+        let i = match c.index.get(&(cx, cz)) {
+            Some(i) => *i,
+            None => {
+                let loaded = self.source.is_loaded(cx << 4, cz << 4);
+                let i = c.columns.len() as u32;
+                c.columns.push(Column {
+                    loaded,
+                    sections: (0..self.sections_per_column)
+                        .map(|_| Section::Unfetched)
+                        .collect(),
+                });
+                c.index.insert((cx, cz), i);
+                i
+            }
+        };
+        c.last_key = (cx, cz);
+        c.last = i;
+        i
     }
 
     /// `get0`: the loaded world if the chunk is there, else the cached region, else air.
@@ -204,10 +322,41 @@ impl BlockStateInterface {
         if adj < 0 || adj >= self.height {
             return self.air;
         }
-        if self.use_the_real_world && self.source.is_loaded(x, z) {
-            return self.source.state(x, y, z);
+        let Some(cache) = &self.sections else {
+            if self.use_the_real_world && self.source.is_loaded(x, z) {
+                return self.source.state(x, y, z);
+            }
+            return self.get_cached(x, y, z);
+        };
+        let mut c = cache.borrow_mut();
+        let ci = self.column(&mut c, x >> 4, z >> 4) as usize;
+        if !(self.use_the_real_world && c.columns[ci].loaded) {
+            drop(c);
+            return self.get_cached(x, y, z);
         }
-        self.get_cached(x, y, z)
+        let sy = (adj >> 4) as usize;
+        let idx = ((adj & 15) << 8 | (z & 15) << 4 | (x & 15)) as usize;
+        match &c.columns[ci].sections[sy] {
+            Section::Uniform(s) => return *s,
+            Section::Data(d) => return d[idx],
+            Section::Unfetched => {}
+        }
+        // The first read of this section: copy all of it.
+        let c = &mut *c;
+        let fill = self
+            .source
+            .copy_section(x >> 4, sy as i32, z >> 4, self.min_y, &mut c.scratch);
+        let (section, state) = match fill {
+            SectionFill::Uniform(s) => (Section::Uniform(s), s),
+            SectionFill::Filled => {
+                let data = std::mem::replace(&mut c.scratch, Box::new([StateId(0); 4096]));
+                let s = data[idx];
+                (Section::Data(data), s)
+            }
+            SectionFill::Unloaded => (Section::Uniform(self.air), self.air),
+        };
+        c.columns[ci].sections[sy] = section;
+        state
     }
 
     fn get_cached(&self, x: i32, y: i32, z: i32) -> StateId {
@@ -234,7 +383,7 @@ impl BlockStateInterface {
 
     /// `isLoaded`: the loaded world or the cache has this column.
     pub fn is_loaded(&self, x: i32, z: i32) -> bool {
-        if self.source.is_loaded(x, z) {
+        if self.world_contains_loaded_chunk(x, z) {
             return true;
         }
         let Some(cache) = &self.cache else {
@@ -257,6 +406,22 @@ impl BlockStateInterface {
 
     pub fn air(&self) -> StateId {
         self.air
+    }
+
+    /// How many sections this lookup has copied (for statistics).
+    pub fn sections_copied(&self) -> usize {
+        self.sections.as_ref().map_or(0, |c| {
+            c.borrow()
+                .columns
+                .iter()
+                .map(|col| {
+                    col.sections
+                        .iter()
+                        .filter(|s| !matches!(s, Section::Unfetched))
+                        .count()
+                })
+                .sum()
+        })
     }
 }
 

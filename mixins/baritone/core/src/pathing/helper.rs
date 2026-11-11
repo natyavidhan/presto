@@ -215,7 +215,7 @@ pub fn fully_passable_state(ctx: &CalculationContext, state: StateId) -> bool {
 }
 
 /// `isReplaceable`, for MovementTraverse and MovementAscend.
-pub fn is_replaceable(ctx: &CalculationContext, x: i32, y: i32, z: i32, info: &BlockInfo) -> bool {
+pub fn is_replaceable(ctx: &CalculationContext, x: i32, _y: i32, z: i32, info: &BlockInfo) -> bool {
     if info.is_air() {
         return true;
     }

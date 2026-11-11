@@ -8,8 +8,12 @@
 //! The module layout follows Baritone's Java packages, and items keep their Java names in their docs, so the
 //! two read side by side.
 
+pub mod behavior;
 pub mod cache;
+pub mod ctx;
 pub mod math;
+pub mod pathing;
+pub mod player;
 pub mod settings;
 pub mod world;
 

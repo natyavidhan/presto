@@ -175,11 +175,15 @@ pub struct RawState {
 }
 
 /// Everything Baritone asks about one block state.
+///
+/// `repr(C)` with the fields the search reads first: they share the struct's first cache line, and the shapes,
+/// names and properties (read rarely) come after.
 #[derive(Clone, Debug)]
+#[repr(C)]
 pub struct BlockInfo {
-    pub name: Arc<str>,
-    pub block: BlockId,
     pub flags: u64,
+    pub block: BlockId,
+    pub hardness: f32,
     pub fluid: Fluid,
     pub fluid_amount: u8,
     pub fluid_source: bool,
@@ -196,8 +200,8 @@ pub struct BlockInfo {
     pub facing: Option<Direction>,
     /// `SnowLayerBlock.LAYERS`.
     pub snow_layers: u8,
-    pub hardness: f32,
     pub requires_tool: bool,
+    pub name: Arc<str>,
     pub collision: Arc<[Aabb]>,
     pub outline: Arc<[Aabb]>,
     pub properties: Arc<[(Arc<str>, Arc<str>)]>,

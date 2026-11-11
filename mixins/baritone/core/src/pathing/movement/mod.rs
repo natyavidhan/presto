@@ -678,7 +678,6 @@ impl Movement {
         if state.status == MovementStatus::Waiting {
             return true;
         }
-        let mut something_in_the_way = false;
         for &pos in &self.positions_to_break {
             if ex.ctx.settings.pause_mining_for_falling_blocks
                 && ex.ctx.game.entities.iter().any(|e| {
@@ -696,7 +695,6 @@ impl Movement {
                 return false;
             }
             if !helper::can_walk_through_pos(&ex.ctx.world, pos) {
-                something_in_the_way = true;
                 ex.switch_to_best_tool_for(pos);
                 if let Some(rot) = ex.reachable(pos, false) {
                     state.set_target(MovementTarget::new(rot, true));
@@ -706,15 +704,11 @@ impl Movement {
                     return false;
                 }
                 // No face of it is in sight: aim at its middle and break whatever is in the way anyway.
+                // (Java Baritone then has an UNREACHABLE fallback that every path through here returns before.)
                 state.set_target(MovementTarget::new(ex.ctx.rotation_to(pos.center()), true));
                 state.set_input(Input::ClickLeft, true);
                 return false;
             }
-        }
-        if something_in_the_way {
-            // Blocks we can't walk through, but no rotation to reach any of them.
-            state.set_status(MovementStatus::Unreachable);
-            return true;
         }
         true
     }

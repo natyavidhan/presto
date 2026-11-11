@@ -242,7 +242,12 @@ impl CalculationContext {
     ) -> CalculationContext {
         let s = settings.as_ref();
         let table = view.table.clone();
-        let bsi = BlockStateInterface::new(view, !s.path_through_cached_only);
+        // A context for a search copies the sections it reads into flat arrays; a live one reads directly.
+        let bsi = if for_use_on_another_thread {
+            BlockStateInterface::for_search(view, !s.path_through_cached_only)
+        } else {
+            BlockStateInterface::new(view, !s.path_through_cached_only)
+        };
         let precomputed = PrecomputedData::new(&table);
         let tool_set = ToolSet::new(inventory, player, s, &table);
         let has_water_bucket = s.allow_water_bucket_fall
