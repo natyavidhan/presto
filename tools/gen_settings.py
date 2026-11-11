@@ -1,6 +1,10 @@
-"""Generate the Rust settings table from Baritone's Settings.java.
+"""Generate Presto's settings table from Baritone's Settings.java.
 
-Usage: python -I tools/gen_settings.py <path to Baritone>/src/api/java/baritone/api/Settings.java mixins/baritone/core/src/settings/list.rs
+Presto keeps Baritone's settings: their names, types, defaults and descriptions, with the bot called Presto in the
+descriptions, a few defaults changed for speed (OVERRIDES), one setting renamed for the name (RENAMES) and a few
+added (EXTRA).
+
+Usage: python -I tools/gen_settings.py <path to Baritone>/src/api/java/baritone/api/Settings.java mixins/presto/core/src/settings/list.rs
 """
 import re
 import sys
@@ -16,6 +20,21 @@ COLORS = {
 }
 
 SKIP = {"logger", "notifier", "toaster"}
+
+# Settings named after the bot get Presto's name; `Settings::meta` still reads the old one from a settings file.
+RENAMES = {"shortBaritonePrefix": "shortPrestoPrefix"}
+
+
+def presto_doc(line: str) -> str:
+    """A description line from Settings.java with the bot called Presto. Links to Baritone stay as they are."""
+    parts = re.split(r'(<a href="[^"]*">|https?://\S+)', line)
+    for i in range(0, len(parts), 2):
+        part = parts[i]
+        part = part.replace("[B]", "[P]")
+        part = re.sub(r"\bBaritone\b", "Presto", part)
+        part = re.sub(r"\bbaritone\b", "Presto", part)
+        parts[i] = part
+    return "".join(parts)
 
 
 def snake(name: str) -> str:
@@ -73,39 +92,40 @@ for m in pattern.finditer(src):
     jtype = m.group("type").strip()
     default = re.sub(r"//[^\n]*", "", m.group("default"))
     default = " ".join(default.split())
-    doc = clean_doc(m.group("doc") or "")
+    doc = [presto_doc(line) for line in clean_doc(m.group("doc") or "")]
+    name = RENAMES.get(name, name)
     entries.append((name, jtype, default, doc))
 
 out = []
-# Defaults this port changes, for speed: Java Baritone idles between blocks and clicks; here the waits are off
+# Defaults Presto changes, for speed: Java Baritone idles between blocks and clicks; here the waits are off
 # by default and each stays a setting, so a server that watches for them can have them back.
 OVERRIDES = {
     "blockBreakSpeed": ("1", [
         "",
-        "Java Baritone defaults to 6, idling a quarter of a second after every block it breaks. This port",
+        "Java Baritone defaults to 6, idling a quarter of a second after every block it breaks. Presto",
         "defaults to 1: no wait. Raise it (and `randomActionDelayTicks`) for a vanilla-like rhythm.",
     ]),
     "rightClickSpeed": ("1", [
         "",
-        "Java Baritone defaults to 4. This port defaults to 1: a block placed every tick when bridging or",
+        "Java Baritone defaults to 4. Presto defaults to 1: a block placed every tick when bridging or",
         "pillaring. Raise it for vanilla's rhythm.",
     ]),
     "mineDropLoiterDurationMSThanksLouca": ("0", [
         "",
-        "Java Baritone waits 250 ms after each ore. This port doesn't by default; drops are still collected",
+        "Java Baritone waits 250 ms after each ore. Presto doesn't by default; drops are still collected",
         "on the way with `mineScanDroppedItems`.",
     ]),
     "randomLooking113": ("0.0", [
         "",
         "Java Baritone defaults to 2 degrees, which makes aims at the edge of a block miss and try again.",
-        "This port aims exactly by default; raise it to look less robotic.",
+        "Presto aims exactly by default; raise it to look less robotic.",
     ]),
 }
 
-# Settings this port adds, after Baritone's own.
+# Settings Presto adds, after Baritone's own.
 EXTRA = [
     ("instantAim", "Boolean", "true", [
-        "Act in the same tick as turning: when Baritone turns to a block to break it or place against it,",
+        "Act in the same tick as turning: when Presto turns to a block to break it or place against it,",
         "it does so that tick, as the game applies the turn before the click. Off, it turns one tick and",
         "acts the next, as Java Baritone does (a 50 ms pause before every block).",
     ]),
@@ -133,8 +153,8 @@ for name, jtype, default, doc in entries:
     patched.append((name, jtype, default, doc))
 entries = patched + [(n, t, d, doc) for n, t, d, doc in EXTRA]
 
-out.append("// Generated from Baritone's Settings.java by tools/gen_settings.py. Do not edit by hand:")
-out.append("// regenerate it instead, so the names, defaults and descriptions stay Baritone's.")
+out.append("// Generated from Baritone's Settings.java by tools/gen_settings.py. Do not edit by hand: regenerate it")
+out.append("// instead, so the names, defaults and descriptions stay Baritone's (with the bot called Presto).")
 out.append("define_settings! {")
 for name, jtype, default, doc in entries:
     if jtype == "Boolean":
