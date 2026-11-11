@@ -744,6 +744,8 @@ pub struct BlockTable {
     lava: StateId,
     /// The block a cached `SOLID` cell reads as when nothing better is known (`CachedChunk` uses obsidian).
     solid: StateId,
+    /// What breaking each block drops, by [`BlockId`] (the block's own item unless the game says otherwise).
+    drops: Vec<Arc<[Arc<str>]>>,
     /// Bumped each time a table is built, so caches keyed by state know when to start over.
     pub generation: u64,
 }
@@ -791,6 +793,17 @@ impl BlockTable {
         let solid = find("minecraft:obsidian")
             .or_else(|| find("minecraft:stone"))
             .unwrap_or(air);
+        let drops = blocks
+            .iter()
+            .map(|b| {
+                let item = &states[b.default_state.0 as usize].item;
+                if item.is_empty() || &**item == "minecraft:air" {
+                    Arc::from(Vec::<Arc<str>>::new())
+                } else {
+                    Arc::from(vec![item.clone()])
+                }
+            })
+            .collect();
         BlockTable {
             states,
             blocks,
@@ -799,6 +812,7 @@ impl BlockTable {
             water,
             lava,
             solid,
+            drops,
             generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
@@ -881,7 +895,18 @@ impl BlockTable {
             })
         })
     }
-    /// Whether a block position's state is in the given block list (`List<Block>` settings).
+    /// What breaking a block drops (`BlockOptionalMeta.drops`).
+    pub fn drops(&self, block: BlockId) -> &[Arc<str>] {
+        self.drops.get(block.0 as usize).map_or(&[], |d| d)
+    }
+
+    /// Sets what breaking a block drops, from the game's loot tables.
+    pub fn set_drops(&mut self, block: BlockId, items: Vec<Arc<str>>) {
+        if let Some(d) = self.drops.get_mut(block.0 as usize) {
+            *d = Arc::from(items);
+        }
+    }
+
     pub fn name_of(&self, state: StateId) -> &str {
         &self.get(state).name
     }

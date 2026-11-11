@@ -189,6 +189,36 @@ impl Exec<'_, '_> {
     pub fn crouching(&self) -> bool {
         self.ctx.player.crouching
     }
+
+    /// Whether the crosshair is on `pos`, or (with `instantAim`) will be once `rotation`, this tick's turn, is
+    /// applied: the game turns the player before it handles this tick's clicks, so there is no need to wait a
+    /// tick to be looking at a block before breaking it or placing against it.
+    pub fn will_look_at(&self, pos: BlockPos, rotation: Option<Rotation>) -> bool {
+        if self.ctx.is_looking_at(pos) {
+            return true;
+        }
+        if !self.ctx.settings.instant_aim {
+            return false;
+        }
+        let Some(rotation) = rotation else {
+            return false;
+        };
+        let actual = self
+            .look
+            .peek(rotation, self.ctx.player_rotations(), self.ctx.game.mouse_sensitivity);
+        self.ctx
+            .ray_trace_towards(actual, self.ctx.block_reach_distance(), self.ctx.player.crouching)
+            .block_pos()
+            == Some(pos)
+    }
+
+    /// For a rotation `RotationUtils.reachable` gave: already checked to put the crosshair on its block, so
+    /// with `instantAim` it can be acted on this tick; otherwise only once the player is looking there.
+    pub fn can_act_on(&self, pos: BlockPos, rotation: Rotation) -> bool {
+        self.ctx.settings.instant_aim
+            || self.ctx.is_looking_at(pos)
+            || self.ctx.player_rotations().is_really_close_to(rotation)
+    }
 }
 
 /// `Movement`, with what each kind keeps between ticks.
@@ -698,7 +728,7 @@ impl Movement {
                 ex.switch_to_best_tool_for(pos);
                 if let Some(rot) = ex.reachable(pos, false) {
                     state.set_target(MovementTarget::new(rot, true));
-                    if ex.ctx.is_looking_at(pos) || ex.ctx.player_rotations().is_really_close_to(rot) {
+                    if ex.can_act_on(pos, rot) {
                         state.set_input(Input::ClickLeft, true);
                     }
                     return false;
@@ -880,6 +910,11 @@ pub fn attempt_to_place_a_block(
             state.set_input(Input::Sneak, true);
         }
         ex.select_throwaway_for_location(true, place_at.x, place_at.y, place_at.z);
+        // The turn found above was checked with a ray from the eyes the player has now; with instantAim it is
+        // applied before this tick's click, so it can place this tick rather than the next.
+        if ex.ctx.settings.instant_aim && would_sneak == ex.crouching() {
+            return PlaceResult::ReadyToPlace;
+        }
         return PlaceResult::Attempting;
     }
     PlaceResult::NoOption

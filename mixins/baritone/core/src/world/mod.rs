@@ -54,6 +54,46 @@ pub trait BlockSource: Send + Sync {
             SectionFill::Filled
         }
     }
+
+    /// Adds to `out` every block of section `sy` of chunk `cx, cz` whose state is in `wanted`, in
+    /// `y, z, x` order. Returns false when the chunk isn't loaded. A source with palettes should override
+    /// this to skip sections whose palette holds none of `wanted` without unpacking them.
+    fn scan_section(
+        &self,
+        cx: i32,
+        sy: i32,
+        cz: i32,
+        min_y: i32,
+        wanted: &crate::utils::block_optional_meta::StateSet,
+        out: &mut Vec<BlockPos>,
+    ) -> bool {
+        let mut buf = [StateId(0); 4096];
+        let (bx, by, bz) = (cx << 4, min_y + (sy << 4), cz << 4);
+        match self.copy_section(cx, sy, cz, min_y, &mut buf) {
+            SectionFill::Unloaded => false,
+            SectionFill::Uniform(s) => {
+                if wanted.contains(s) {
+                    for y in 0..16 {
+                        for z in 0..16 {
+                            for x in 0..16 {
+                                out.push(BlockPos::new(bx + x, by + y, bz + z));
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            SectionFill::Filled => {
+                for (i, s) in buf.iter().enumerate() {
+                    if wanted.contains(*s) {
+                        let i = i as i32;
+                        out.push(BlockPos::new(bx + (i & 15), by + (i >> 8), bz + ((i >> 4) & 15)));
+                    }
+                }
+                true
+            }
+        }
+    }
 }
 
 /// A source with no chunks at all.

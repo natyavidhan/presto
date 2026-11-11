@@ -15,6 +15,7 @@ pub mod math;
 pub mod pathing;
 pub mod player;
 pub mod settings;
+pub mod utils;
 pub mod world;
 
 pub use math::{Aabb, BlockPos, Direction, Rotation, Vec3};

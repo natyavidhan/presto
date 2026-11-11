@@ -279,6 +279,34 @@ pub struct SearchLimits {
     pub map_default_size: usize,
 }
 
+/// The search's state between steps, so it can run for a while on one thread and carry on on another.
+struct SearchState {
+    open: OpenSet,
+    best_heuristic: [f64; 7],
+    best: [u32; 7],
+    res: MoveResult,
+    started: Instant,
+    primary_deadline: Instant,
+    failure_deadline: Instant,
+    last_publish: Instant,
+    failing: bool,
+    num_nodes: usize,
+    num_movements_considered: usize,
+    num_empty_chunk: i32,
+    is_favoring: bool,
+    minimum_improvement: f64,
+    most_recent: u32,
+    limits: SearchLimits,
+}
+
+/// How a run of the search ended.
+enum Step {
+    /// Out of time for this run; call again to carry on.
+    Paused,
+    /// Done: the path's positions and costs (or none), and the nodes expanded.
+    Done(Option<(Vec<BlockPos>, Vec<f64>, usize)>),
+}
+
 /// `AStarPathFinder`.
 pub struct AStarPathFinder {
     real_start: BlockPos,
@@ -289,6 +317,7 @@ pub struct AStarPathFinder {
     nodes: Vec<Node>,
     map: PosMap<u32>,
     shared: Arc<SearchShared>,
+    state: Option<SearchState>,
 }
 
 impl AStarPathFinder {
@@ -308,6 +337,7 @@ impl AStarPathFinder {
             nodes: Vec::new(),
             map: PosMap::default(),
             shared: Arc::new(SearchShared::default()),
+            state: None,
         }
     }
 
@@ -408,70 +438,103 @@ impl AStarPathFinder {
 
     /// `calculate`: runs the search to the end, on the calling thread.
     pub fn calculate(mut self, limits: SearchLimits) -> PathCalculationResult {
-        let shared = self.shared.clone();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.calculate0(limits)));
-        shared.finished.store(true, Ordering::Release);
-        match result {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = e
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                log::error!("[Baritone] Pathing exception: {msg}");
-                PathCalculationResult {
-                    kind: ResultType::Exception,
-                    path: None,
-                }
-            }
+        self.begin(limits);
+        self.resume()
+    }
+
+    /// Searches on the calling thread for at most `budget`. A search that finishes in time gives its
+    /// result; one that doesn't comes back as it stands, for [`AStarPathFinder::resume`] to finish
+    /// elsewhere (the timeouts keep counting from when it started).
+    pub fn calculate_within(mut self, limits: SearchLimits, budget: Duration) -> Result<PathCalculationResult, Self> {
+        self.begin(limits);
+        let until = Instant::now() + budget;
+        match self.run(Some(until)) {
+            Ok(Step::Done(found)) => Ok(self.finish(found)),
+            Ok(Step::Paused) => Err(self),
+            Err(msg) => Ok(self.failed(msg)),
         }
     }
 
-    fn calculate0(&mut self, limits: SearchLimits) -> PathCalculationResult {
-        let path = self.search(limits);
-        if self.shared.is_cancelled() {
-            return PathCalculationResult {
-                kind: ResultType::Cancellation,
-                path: None,
-            };
+    /// Finishes a search begun by [`AStarPathFinder::calculate_within`].
+    pub fn resume(mut self) -> PathCalculationResult {
+        match self.run(None) {
+            Ok(Step::Done(found)) => self.finish(found),
+            Ok(Step::Paused) => unreachable!("a run without a deadline only stops when done"),
+            Err(msg) => self.failed(msg),
         }
-        let Some((positions, costs, num_nodes)) = path else {
-            return PathCalculationResult {
-                kind: ResultType::Failure,
-                path: None,
-            };
-        };
-        let path = Path::from_positions(positions, self.goal.clone(), num_nodes).post_process(&costs, &self.ctx);
-        let settings = self.ctx.settings.clone();
-        let previous = path.len();
-        let path = path.cutoff_at_loaded_chunks(&self.ctx, &settings);
-        if path.len() < previous {
-            log::debug!(
-                "[Baritone] Cutting off path at edge of loaded chunks, length decreased by {}",
-                previous - path.len()
-            );
-        }
-        let previous = path.len();
-        let path = path.static_cutoff(Some(&self.goal), &settings);
-        if path.len() < previous {
-            log::debug!("[Baritone] Static cutoff {previous} to {}", path.len());
-        }
-        let kind = if self.goal.is_in_goal_pos(path.dest()) {
-            ResultType::SuccessToGoal
-        } else {
-            ResultType::SuccessSegment
-        };
+    }
+
+    /// Runs the search until `until` or the end, catching a panic in a cost function as Baritone catches
+    /// a pathing exception.
+    fn run(&mut self, until: Option<Instant>) -> Result<Step, String> {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.step(until)));
+        result.map_err(|e| {
+            e.downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default()
+        })
+    }
+
+    fn failed(&self, msg: String) -> PathCalculationResult {
+        log::error!("[Baritone] Pathing exception: {msg}");
+        self.shared.finished.store(true, Ordering::Release);
         PathCalculationResult {
-            kind,
-            path: Some(path),
+            kind: ResultType::Exception,
+            path: None,
         }
     }
 
-    /// `calculate0`: the A* itself. Returns the path's positions, the cost at each, and the nodes expanded.
-    fn search(&mut self, limits: SearchLimits) -> Option<(Vec<BlockPos>, Vec<f64>, usize)> {
-        let min_y = self.ctx.min_y;
-        let height = self.bsi_height();
+    /// The end of `AbstractNodeCostSearch.calculate`: build the path, cut it at the loaded chunks and its
+    /// static cutoff, and say whether it reaches the goal.
+    fn finish(&mut self, found: Option<(Vec<BlockPos>, Vec<f64>, usize)>) -> PathCalculationResult {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if self.shared.is_cancelled() {
+                return PathCalculationResult {
+                    kind: ResultType::Cancellation,
+                    path: None,
+                };
+            }
+            let Some((positions, costs, num_nodes)) = found else {
+                return PathCalculationResult {
+                    kind: ResultType::Failure,
+                    path: None,
+                };
+            };
+            let path = Path::from_positions(positions, self.goal.clone(), num_nodes).post_process(&costs, &self.ctx);
+            let settings = self.ctx.settings.clone();
+            let previous = path.len();
+            let path = path.cutoff_at_loaded_chunks(&self.ctx, &settings);
+            if path.len() < previous {
+                log::debug!(
+                    "[Baritone] Cutting off path at edge of loaded chunks, length decreased by {}",
+                    previous - path.len()
+                );
+            }
+            let previous = path.len();
+            let path = path.static_cutoff(Some(&self.goal), &settings);
+            if path.len() < previous {
+                log::debug!("[Baritone] Static cutoff {previous} to {}", path.len());
+            }
+            let kind = if self.goal.is_in_goal_pos(path.dest()) {
+                ResultType::SuccessToGoal
+            } else {
+                ResultType::SuccessSegment
+            };
+            PathCalculationResult {
+                kind,
+                path: Some(path),
+            }
+        }));
+        self.shared.finished.store(true, Ordering::Release);
+        result.unwrap_or_else(|_| PathCalculationResult {
+            kind: ResultType::Exception,
+            path: None,
+        })
+    }
+
+    /// Sets the search up (`calculate0`'s beginning).
+    fn begin(&mut self, limits: SearchLimits) {
         self.map.reserve(limits.map_default_size.max(1024));
         self.nodes.reserve(limits.map_default_size.max(1024));
         let start = self.node_at(self.start.x, self.start.y, self.start.z);
@@ -483,10 +546,6 @@ impl AStarPathFinder {
         let mut open = OpenSet::new();
         open.insert(&mut self.nodes, start);
         let start_estimate = self.nodes[start as usize].estimated_cost_to_goal;
-        let mut best_heuristic = [start_estimate; 7];
-        let mut best = [start; 7];
-        let mut res = MoveResult::new();
-        let border: WorldBorder = self.ctx.world_border;
         let started = Instant::now();
         let (primary, failure) = if limits.slow_path {
             log::debug!(
@@ -498,41 +557,61 @@ impl AStarPathFinder {
         } else {
             (limits.primary_timeout_ms, limits.failure_timeout_ms)
         };
-        let primary_deadline = started + Duration::from_millis(primary);
-        let failure_deadline = started + Duration::from_millis(failure);
-        let mut last_publish = started;
-        let mut failing = true;
-        let mut num_nodes = 0usize;
-        let mut num_movements_considered = 0usize;
-        let mut num_empty_chunk = 0i32;
-        let is_favoring = !self.favoring.is_empty();
-        let minimum_improvement = if limits.minimum_improvement_repropagation {
-            MIN_IMPROVEMENT
-        } else {
-            0.0
-        };
-        let mut most_recent = NO_NODE;
-        while !open.is_empty()
-            && num_empty_chunk < limits.max_chunk_border_fetch
+        self.state = Some(SearchState {
+            open,
+            best_heuristic: [start_estimate; 7],
+            best: [start; 7],
+            res: MoveResult::new(),
+            started,
+            primary_deadline: started + Duration::from_millis(primary),
+            failure_deadline: started + Duration::from_millis(failure),
+            last_publish: started,
+            failing: true,
+            num_nodes: 0,
+            num_movements_considered: 0,
+            num_empty_chunk: 0,
+            is_favoring: !self.favoring.is_empty(),
+            minimum_improvement: if limits.minimum_improvement_repropagation {
+                MIN_IMPROVEMENT
+            } else {
+                0.0
+            },
+            most_recent: NO_NODE,
+            limits,
+        });
+    }
+
+    /// `calculate0`'s loop, run until `until` (if given) or the end.
+    fn step(&mut self, until: Option<Instant>) -> Step {
+        let mut st = self.state.take().expect("the search was begun");
+        let min_y = self.ctx.min_y;
+        let height = self.ctx.bsi.dimension.height;
+        let border: WorldBorder = self.ctx.world_border;
+        while !st.open.is_empty()
+            && st.num_empty_chunk < st.limits.max_chunk_border_fetch
             && !self.shared.is_cancelled()
         {
-            if num_nodes & 63 == 0 {
+            if st.num_nodes & 63 == 0 {
                 // A clock read every 64 nodes.
                 let now = Instant::now();
-                if now >= failure_deadline || (!failing && now >= primary_deadline) {
+                if now >= st.failure_deadline || (!st.failing && now >= st.primary_deadline) {
                     break;
                 }
-                if now.duration_since(last_publish) >= Duration::from_millis(50) {
-                    last_publish = now;
-                    self.publish(&best, most_recent, num_nodes);
+                if until.is_some_and(|u| now >= u) {
+                    self.state = Some(st);
+                    return Step::Paused;
+                }
+                if now.duration_since(st.last_publish) >= Duration::from_millis(50) {
+                    st.last_publish = now;
+                    self.publish(&st.best, st.most_recent, st.num_nodes);
                 }
             }
-            if limits.slow_path {
-                std::thread::sleep(Duration::from_millis(limits.slow_path_delay_ms));
+            if st.limits.slow_path {
+                std::thread::sleep(Duration::from_millis(st.limits.slow_path_delay_ms));
             }
-            let current = open.remove_lowest(&mut self.nodes);
-            most_recent = current;
-            num_nodes += 1;
+            let current = st.open.remove_lowest(&mut self.nodes);
+            st.most_recent = current;
+            st.num_nodes += 1;
             let Node {
                 x: cx,
                 y: cy,
@@ -542,12 +621,13 @@ impl AStarPathFinder {
             } = self.nodes[current as usize];
             if self.goal.is_in_goal(cx, cy, cz) {
                 log::debug!(
-                    "[Baritone] Took {}ms, {num_movements_considered} movements considered",
-                    started.elapsed().as_millis()
+                    "[Baritone] Took {}ms, {} movements considered",
+                    st.started.elapsed().as_millis(),
+                    st.num_movements_considered
                 );
-                self.publish(&best, most_recent, num_nodes);
+                self.publish(&st.best, st.most_recent, st.num_nodes);
                 let (positions, costs) = self.chain(current);
-                return Some((positions, costs, num_nodes));
+                return Step::Done(Some((positions, costs, st.num_nodes)));
             }
             for mv in Moves::ALL {
                 let (dx, dy, dz) = mv.offset();
@@ -558,7 +638,7 @@ impl AStarPathFinder {
                     // Only check loading when the move leaves the start's chunk.
                     if !dynamic_xz {
                         // Only count it when the move would certainly have left the loaded area.
-                        num_empty_chunk += 1;
+                        st.num_empty_chunk += 1;
                     }
                     continue;
                 }
@@ -569,9 +649,10 @@ impl AStarPathFinder {
                 if new_y_nominal > height || new_y_nominal < min_y {
                     continue;
                 }
-                res.reset();
-                mv.apply(&self.ctx, cx, cy, cz, &mut res);
-                num_movements_considered += 1;
+                st.res.reset();
+                mv.apply(&self.ctx, cx, cy, cz, &mut st.res);
+                st.num_movements_considered += 1;
+                let res = st.res;
                 let mut action_cost = res.cost;
                 if action_cost >= COST_INF {
                     continue;
@@ -595,38 +676,37 @@ impl AStarPathFinder {
                     "{mv:?} from {cx} {cy} {cz} ended at y {} instead of {new_y_nominal}",
                     res.y
                 );
-                if is_favoring {
+                if st.is_favoring {
                     // Issue #18.
                     action_cost *= self.favoring.calculate(key(res.x, res.y, res.z));
                 }
                 let neighbor = self.node_at(res.x, res.y, res.z);
                 let tentative = current_cost + action_cost;
                 let n = &mut self.nodes[neighbor as usize];
-                if n.cost - tentative > minimum_improvement {
+                if n.cost - tentative > st.minimum_improvement {
                     n.previous = current;
                     n.cost = tentative;
                     n.combined_cost = tentative + n.estimated_cost_to_goal;
                     let estimated = n.estimated_cost_to_goal;
                     let open_already = n.heap_position != 0;
                     let dist_sq = {
-                        let (nx, ny, nz) = (n.x, n.y, n.z);
-                        let dx = (nx - self.start.x) as f64;
-                        let dy = (ny - self.start.y) as f64;
-                        let dz = (nz - self.start.z) as f64;
+                        let dx = (n.x - self.start.x) as f64;
+                        let dy = (n.y - self.start.y) as f64;
+                        let dz = (n.z - self.start.z) as f64;
                         dx * dx + dy * dy + dz * dz
                     };
                     if open_already {
-                        open.update(&mut self.nodes, neighbor);
+                        st.open.update(&mut self.nodes, neighbor);
                     } else {
-                        open.insert(&mut self.nodes, neighbor);
+                        st.open.insert(&mut self.nodes, neighbor);
                     }
                     for (i, coefficient) in COEFFICIENTS.iter().enumerate() {
                         let heuristic = estimated + tentative / coefficient;
-                        if best_heuristic[i] - heuristic > minimum_improvement {
-                            best_heuristic[i] = heuristic;
-                            best[i] = neighbor;
-                            if failing && dist_sq > MIN_DIST_PATH * MIN_DIST_PATH {
-                                failing = false;
+                        if st.best_heuristic[i] - heuristic > st.minimum_improvement {
+                            st.best_heuristic[i] = heuristic;
+                            st.best[i] = neighbor;
+                            if st.failing && dist_sq > MIN_DIST_PATH * MIN_DIST_PATH {
+                                st.failing = false;
                             }
                         }
                     }
@@ -634,27 +714,30 @@ impl AStarPathFinder {
             }
         }
         if self.shared.is_cancelled() {
-            return None;
+            return Step::Done(None);
         }
-        let elapsed = started.elapsed().as_secs_f64().max(1e-9);
+        let elapsed = st.started.elapsed().as_secs_f64().max(1e-9);
         log::debug!(
-            "[Baritone] {num_movements_considered} movements considered, open set {}, node map {}, {} nodes per second",
-            open.len(),
+            "[Baritone] {} movements considered, open set {}, node map {}, {} nodes per second",
+            st.num_movements_considered,
+            st.open.len(),
             self.map.len(),
-            (num_nodes as f64 / elapsed) as u64
+            (st.num_nodes as f64 / elapsed) as u64
         );
-        self.publish(&best, most_recent, num_nodes);
-        match self.best_so_far(&best) {
+        self.publish(&st.best, st.most_recent, st.num_nodes);
+        match self.best_so_far(&st.best) {
             Some(b) => {
                 log::debug!(
-                    "[Baritone] Took {}ms, {num_movements_considered} movements considered",
-                    started.elapsed().as_millis()
+                    "[Baritone] Took {}ms, {} movements considered",
+                    st.started.elapsed().as_millis(),
+                    st.num_movements_considered
                 );
                 let (positions, costs) = self.chain(b);
-                Some((positions, costs, num_nodes))
+                Step::Done(Some((positions, costs, st.num_nodes)))
             }
             None => {
-                let best_dist = best
+                let best_dist = st
+                    .best
                     .iter()
                     .filter(|b| **b != NO_NODE)
                     .map(|b| self.dist_from_start_sq(&self.nodes[*b as usize]))
@@ -664,14 +747,8 @@ impl AStarPathFinder {
                     COEFFICIENTS[COEFFICIENTS.len() - 1],
                     best_dist.sqrt()
                 );
-                None
+                Step::Done(None)
             }
         }
-    }
-
-    /// `world.dimensionType().height()` as the search's upper bound (Baritone compares the next y with the
-    /// height itself, not the top).
-    fn bsi_height(&self) -> i32 {
-        self.ctx.bsi.dimension.height
     }
 }

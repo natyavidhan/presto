@@ -165,14 +165,23 @@ define_settings! {
     /// When breaking blocks for a movement, wait until all falling blocks have settled before continuing
     pause_mining_for_falling_blocks: bool = true => "pauseMiningForFallingBlocks";
     /// How many ticks between right clicks are allowed. Default in game is 4
-    right_click_speed: i32 = 4 => "rightClickSpeed";
+    ///
+    /// Java Baritone defaults to 4. This port defaults to 1: a block placed every tick when bridging or
+    /// pillaring. Raise it for vanilla's rhythm.
+    right_click_speed: i32 = 1 => "rightClickSpeed";
     /// How many degrees to randomize the yaw every tick. Set to 0 to disable
-    random_looking113: f64 = 2.0 => "randomLooking113";
+    ///
+    /// Java Baritone defaults to 2 degrees, which makes aims at the edge of a block miss and try again.
+    /// This port aims exactly by default; raise it to look less robotic.
+    random_looking113: f64 = 0.0 => "randomLooking113";
     /// Block reach distance
     block_reach_distance: f32 = 4.5 => "blockReachDistance";
     /// How many ticks between breaking a block and starting to break the next block. Default in game is 6 ticks.
     /// Values under 1 will be clamped. The delay only applies to non-instant (1-tick) breaks.
-    block_break_speed: i32 = 6 => "blockBreakSpeed";
+    ///
+    /// Java Baritone defaults to 6, idling a quarter of a second after every block it breaks. This port
+    /// defaults to 1: no wait. Raise it (and `randomActionDelayTicks`) for a vanilla-like rhythm.
+    block_break_speed: i32 = 1 => "blockBreakSpeed";
     /// How many degrees to randomize the pitch and yaw every tick. Set to 0 to disable
     random_looking: f64 = 0.01 => "randomLooking";
     /// This is the big A* setting.
@@ -541,7 +550,10 @@ define_settings! {
     /// instead of immediately going onto the next one
     ///
     /// Thanks Louca
-    mine_drop_loiter_duration_ms_thanks_louca: i64 = 250 => "mineDropLoiterDurationMSThanksLouca";
+    ///
+    /// Java Baritone waits 250 ms after each ore. This port doesn't by default; drops are still collected
+    /// on the way with `mineScanDroppedItems`.
+    mine_drop_loiter_duration_ms_thanks_louca: i64 = 0 => "mineDropLoiterDurationMSThanksLouca";
     /// Trim incorrect positions too far away, helps performance but hurts reliability in very large schematics
     distance_trim: bool = true => "distanceTrim";
     /// Cancel the current path if the goal has changed, and the path originally ended in the goal but doesn't anymore.
@@ -733,4 +745,15 @@ define_settings! {
     elytra_long_distance_threshold: i32 = 500 => "elytraLongDistanceThreshold";
     /// Sneak when magma blocks are under feet
     allow_walk_on_magma_blocks: bool = false => "allowWalkOnMagmaBlocks";
+    /// Act in the same tick as turning: when Baritone turns to a block to break it or place against it,
+    /// it does so that tick, as the game applies the turn before the click. Off, it turns one tick and
+    /// acts the next, as Java Baritone does (a 50 ms pause before every block).
+    instant_aim: bool = true => "instantAim";
+    /// Up to this many extra ticks, at random, before each block broken or placed, on top of
+    /// `blockBreakSpeed` and `rightClickSpeed`, for a less mechanical rhythm. 0 for none.
+    random_action_delay_ticks: i32 = 0 => "randomActionDelayTicks";
+    /// When a new path is needed, search for it right away on the game thread for up to this many
+    /// milliseconds: short paths (to the next ore, around a corner) start the same tick instead of after a
+    /// handoff to the search thread. A longer search carries on on a thread. 0 always searches on a thread.
+    sync_pathing_budget_ms: i64 = 3 => "syncPathingBudgetMS";
 }

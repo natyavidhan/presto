@@ -169,7 +169,7 @@ pub(super) fn update_state(m: &mut Movement, state: &mut MovementState, ex: &mut
             state.set_input(Input::ClickLeft, true);
             block_is_there = false;
         } else if ex.crouching()
-            && (ctx.is_looking_at(src.below()) || ctx.is_looking_at(src))
+            && (ex.will_look_at(src.below(), state.target.rotation) || ex.will_look_at(src, state.target.rotation))
             && pos.y > dest.y as f64 + 0.1
         {
             state.set_input(Input::ClickRight, true);

@@ -4,3 +4,4 @@
 pub mod input;
 pub mod inventory;
 pub mod look;
+pub mod pathing;

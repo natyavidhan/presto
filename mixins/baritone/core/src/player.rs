@@ -133,6 +133,10 @@ pub struct EntityInfo {
     pub is_player: bool,
     /// Hostile to the player (`Enemy`).
     pub hostile: bool,
+    /// A `Mob` (anything with AI, animals included).
+    pub is_mob: bool,
+    /// A zombified piglin someone hurt, or an enderman that is creepy (stared at).
+    pub angry: bool,
     /// A falling block entity.
     pub falling_block: bool,
 }

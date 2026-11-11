@@ -3,6 +3,7 @@
 
 pub mod calc;
 pub mod context;
+pub mod executor;
 pub mod costs;
 pub mod goals;
 pub mod helper;

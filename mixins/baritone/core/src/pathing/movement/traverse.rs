@@ -339,8 +339,8 @@ pub(super) fn update_state(m: &mut Movement, state: &mut MovementState, ex: &mut
         } else {
             state.set_target(MovementTarget::new(back_to_face, true));
         }
-        if ex.ctx.is_looking_at(goal_look) {
-            state.set_input(Input::ClickRight, true); // right click only once we can place
+        if ex.will_look_at(goal_look, state.target.rotation) {
+            state.set_input(Input::ClickRight, true); // right click once we can place
             return;
         }
         if let Some(t) = state.target.rotation

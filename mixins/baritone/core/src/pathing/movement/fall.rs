@@ -73,7 +73,7 @@ pub(super) fn update_state(m: &mut Movement, state: &mut MovementState, ex: &mut
         if pos.y - (dest.y as f64) < ctx.block_reach_distance() && !ctx.player.on_ground {
             ex.inventory.select(bucket);
             target_rotation = Some(Rotation::new(to_dest.yaw, 90.0));
-            if ctx.is_looking_at(dest) || ctx.is_looking_at(dest.below()) {
+            if ex.will_look_at(dest, target_rotation) || ex.will_look_at(dest.below(), target_rotation) {
                 state.set_input(Input::ClickRight, true);
             }
         }
